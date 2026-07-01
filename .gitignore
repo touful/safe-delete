@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+
+# Audit logs (local)
+.safe-delete/
+.safe-delete-user-test/
+
+# IDE
+.vs/
+.vscode/
+
+# OS
+Thumbs.db
+*.user
