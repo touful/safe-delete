@@ -1,29 +1,21 @@
 # SafeDelete 审计日志 Schema
 
-## 当前版本：v2
+## 当前版本：v3
 
 ## 字段清单
 | JSON key | 类型 | 说明 | 是否必现 | 引入版本 |
 |:---|:---|:---|:---:|:---:|
-| `schema_version` | int | 恒 2 | ✅ | v2 |
-| `ts` | string | UTC ISO-8601 毫秒精度带 Z，如 `2026-07-01T14:21:59.099Z` | ✅ | v2 |
+| `ts` | string | UTC ISO-8601 分钟精度带 Z，如 `2026-07-01T15:24Z` | ✅ | v2（v3 精度降为分钟） |
 | `op` | string | 12 位小写 hex，取自 GUID(N)[..12] | ✅ | v2 |
 | `event` | enum | `decision` 或 `result` | ✅ | v2 |
-| `user` | string | WindowsIdentity.Name（Windows 下为 `MACHINE\user` 或 `DOMAIN\user`） | ✅ | v2 |
-| `pid` | int | 进程 ID | ✅ | v2 |
-| `cwd` | string | 绝对路径，作为 path 字段的锚点 | ✅ | v2 |
-| `args` | string[] | 原始命令行参数（含 `--reason` 原文） | ✅ | v2 |
-| `path` | string | 相对 cwd 的相对路径；跨盘或异常时回退绝对路径 | ✅ | v2 |
-| `input` | string? | 用户键入的原始路径 | 否 | v2 |
+| `cwd` | string | 绝对路径 | ✅ | v2 |
+| `args` | string[] | 原始命令行参数（含 `--reason` 原文和目标路径） | ✅ | v2 |
 | `exists` | bool? | 目标是否存在 | 否 | v2 |
 | `kind` | enum | `file` 或 `dir` | 否 | v2 |
 | `files` | long? | 文件数（目录时） | 否 | v2 |
 | `dirs` | long? | 子目录数（目录时） | 否 | v2 |
-| `bytes` | long? | 总字节数 | 否 | v2 |
 | `dry_run` | bool? | 仅 `true` 时出现 | 否 | v2 |
 | `yes` | bool? | 仅 `true` 时出现 | 否 | v2 |
-| `reason` | string? | 用户提供的动机文本 | 否 | v2 |
-| `decision` | enum | `allowed` 或 `rejected` | 否 | v2 |
 | `deny` | string? | 仅拒绝时出现 | 否 | v2 |
 | `result` | enum | 见下方 result 值语义 | 否 | v2 |
 | `ex_type` | string? | 异常类型全名，仅异常时出现 | 否 | v2 |
@@ -86,18 +78,28 @@
 | `machine` | — | 删除 |
 | `user` (`MACHINE\user@MACHINE`) | `user` (`MACHINE\user`) | 去除重复机器名后缀 |
 
+## v2 → v3 变更
+- 删除字段（8 个）：`schema_version`、`user`、`pid`、`path`、`input`、`bytes`、`reason`、`decision`
+- 变更编码：中文/Unicode 字符不再 `\uXXXX` 转义（Encoder 改为 UnsafeRelaxedJsonEscaping）
+- 时间戳精度：从毫秒（`yyyy-MM-ddTHH:mm:ss.fffZ`）降到分钟（`yyyy-MM-ddTHH:mmZ`）
+- 版本识别：v3 及以后不再写入 `schema_version` 字段；解析器通过"是否含 `schema_version` 字段"识别 v1/v2 vs v3+
+
+### v3 字段恢复语义
+- **who**：由日志文件所在路径隐含（`%LocalAppData%\SafeDelete\audit.jsonl` = 当前 Windows 用户；项目日志隐含项目工作目录）
+- **why**：从 `args` 中 `--reason` 后一位提取
+- **目标路径**：从 `args` 中的位置参数提取
+- **决策**：从 `result` 值本身推断（result 值枚举已完整覆盖）
+- **快照 bytes**：不再记录；如需可通过 `--dry-run` 预览时查看 CLI 输出
+
 ## 版本演进策略
-- 破坏性变更必须 bump `schema_version` 并在本文件维护映射表。
+- v1/v2 通过 `schema_version` 字段显式标记版本。
+- v3 及以后不再写入 `schema_version` 字段；解析器通过"是否含 `schema_version` 字段"识别 v1/v2 vs v3+。
 - JSONL 按行追加，旧版本行保留不改写。
-- 下游解析方应先读 `schema_version` 字段再解析。
 
 ## 隐私披露声明（F-3 应答）
 审计日志将包含以下本地/身份信息，请勿上传至不可信环境：
-- `args`：包括用户 `--reason` 中的原文。
-- `reason`：用户提供的动机文本。
+- `args`：包括用户 `--reason` 中的原文以及目标路径位置参数。
 - `cwd`：本机工作目录绝对路径（可能暴露目录结构）。
-- `user`：Windows 身份标识（可能包含机器名或域名前缀）。
-- `input` / `path`：目标路径信息。
 
 未来版本可能通过环境变量提供脱敏选项（尚未实现）。
 

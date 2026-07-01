@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Runtime.InteropServices;
@@ -47,13 +47,8 @@ internal static class SafeDeleteApp
         var options = parse.Options;
         var evaluation = PolicyEvaluator.Evaluate(options.Path, workingDirectory, auditLogger.ProtectedDirectories);
         var decisionAudit = AuditEvent.Create(operationId, "decision", rawArgs, workingDirectory);
-        decisionAudit.InputPath = options.Path;
-        decisionAudit.NormalizedPath = evaluation.NormalizedPath is not null
-            ? ToRelativeDisplay(evaluation.NormalizedPath, workingDirectory)
-            : null;
         decisionAudit.DryRun = options.DryRun ? true : null;
         decisionAudit.Yes = options.Yes ? true : null;
-        decisionAudit.Reason = options.Reason;
         decisionAudit.TargetExists = evaluation.Exists;
         decisionAudit.TargetKind = evaluation.Inventory?.Kind switch
         {
@@ -63,7 +58,6 @@ internal static class SafeDeleteApp
         };
         decisionAudit.FileCount = evaluation.Inventory?.FileCount;
         decisionAudit.DirectoryCount = evaluation.Inventory?.DirectoryCount;
-        decisionAudit.TotalBytes = evaluation.Inventory?.TotalBytes;
 
         if (evaluation.Status == PolicyStatus.NotFound)
         {
@@ -90,7 +84,6 @@ internal static class SafeDeleteApp
 
         if (options.DryRun)
         {
-            decisionAudit.Decision = "allowed";
             decisionAudit.Result = "dry_run";
             decisionAudit.ExitCode = ExitSuccess;
 
@@ -112,7 +105,6 @@ internal static class SafeDeleteApp
             return CompleteRejected(auditLogger, decisionAudit, "confirmation_rejected", denialReason, ExitPolicyRejected);
         }
 
-        decisionAudit.Decision = "allowed";
         decisionAudit.Result = "execute_started";
         decisionAudit.ExitCode = null;
 
@@ -265,7 +257,6 @@ internal static class SafeDeleteApp
         bool printUsage = false,
         int auditFailureExitCode = ExitAuditBeforeExecutionFailed)
     {
-        audit.Decision = "rejected";
         audit.Result = result;
         audit.DenialReason = denialReason;
         audit.ExitCode = exitCode;
@@ -798,7 +789,8 @@ internal sealed class AuditLogger
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = false,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
     private AuditLogger(IReadOnlyList<string> logPaths)
@@ -936,13 +928,8 @@ internal sealed class AuditLogger
 
 internal sealed class AuditEvent
 {
-    public const int CurrentSchemaVersion = 2;
-
-    [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
-
     [JsonPropertyName("ts")]
-    public string TimestampUtc { get; init; } = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+    public string TimestampUtc { get; init; } = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mmZ", CultureInfo.InvariantCulture);
 
     [JsonPropertyName("op")]
     public required string OperationId { get; init; }
@@ -950,23 +937,11 @@ internal sealed class AuditEvent
     [JsonPropertyName("event")]
     public required string EventType { get; set; }
 
-    [JsonPropertyName("user")]
-    public string User { get; init; } = GetCurrentUserIdentity();
-
-    [JsonPropertyName("pid")]
-    public int ProcessId { get; init; } = Environment.ProcessId;
-
     [JsonPropertyName("cwd")]
     public required string WorkingDirectory { get; init; }
 
     [JsonPropertyName("args")]
     public required string[] RawArguments { get; init; }
-
-    [JsonPropertyName("path")]
-    public string? NormalizedPath { get; set; }
-
-    [JsonPropertyName("input")]
-    public string? InputPath { get; set; }
 
     [JsonPropertyName("exists")]
     public bool? TargetExists { get; set; }
@@ -980,20 +955,11 @@ internal sealed class AuditEvent
     [JsonPropertyName("dirs")]
     public long? DirectoryCount { get; set; }
 
-    [JsonPropertyName("bytes")]
-    public long? TotalBytes { get; set; }
-
     [JsonPropertyName("dry_run")]
     public bool? DryRun { get; set; }
 
     [JsonPropertyName("yes")]
     public bool? Yes { get; set; }
-
-    [JsonPropertyName("reason")]
-    public string? Reason { get; set; }
-
-    [JsonPropertyName("decision")]
-    public string? Decision { get; set; }
 
     [JsonPropertyName("deny")]
     public string? DenialReason { get; set; }
@@ -1029,30 +995,13 @@ internal sealed class AuditEvent
             EventType = eventType,
             WorkingDirectory = WorkingDirectory,
             RawArguments = RawArguments,
-            InputPath = InputPath,
-            NormalizedPath = NormalizedPath,
             TargetExists = TargetExists,
             TargetKind = TargetKind,
             FileCount = FileCount,
             DirectoryCount = DirectoryCount,
-            TotalBytes = TotalBytes,
             DryRun = DryRun,
             Yes = Yes,
-            Reason = Reason,
-            Decision = Decision,
             DenialReason = DenialReason
         };
-    }
-
-    private static string GetCurrentUserIdentity()
-    {
-        try
-        {
-            return WindowsIdentity.GetCurrent().Name;
-        }
-        catch
-        {
-            return $"{Environment.UserName}@{Environment.MachineName}";
-        }
     }
 }
