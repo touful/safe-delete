@@ -113,7 +113,7 @@ internal static class SafeDeleteApp
         }
 
         decisionAudit.Decision = "allowed";
-        decisionAudit.Result = "execution_planned";
+        decisionAudit.Result = "execute_started";
         decisionAudit.ExitCode = null;
 
         if (!WriteAudit(auditLogger, decisionAudit, out var preDeleteAuditError))
@@ -153,7 +153,7 @@ internal static class SafeDeleteApp
             resultAudit.Result = "deleted_to_recycle_bin";
             resultAudit.ExitCode = ExitSuccess;
 
-            if (!WriteAudit(auditLogger, resultAudit, out var postDeleteAuditError))
+            if (!WriteAudit(auditLogger, resultAudit, out var postDeleteAuditError, bestEffort: true))
             {
                 Console.Error.WriteLine($"Audit write failed: {postDeleteAuditError}");
                 return ExitAuditAfterExecutionFailed;
@@ -169,7 +169,7 @@ internal static class SafeDeleteApp
             resultAudit.ExceptionMessage = ex.Message;
             resultAudit.ExitCode = ExitDeleteFailed;
 
-            if (!WriteAudit(auditLogger, resultAudit, out var deleteFailureAuditError))
+            if (!WriteAudit(auditLogger, resultAudit, out var deleteFailureAuditError, bestEffort: true))
             {
                 Console.Error.WriteLine($"Audit write failed: {deleteFailureAuditError}");
                 return ExitAuditAfterExecutionFailed;
@@ -201,18 +201,22 @@ internal static class SafeDeleteApp
         }
     }
 
+    /// <summary>
+    /// 将绝对路径转为相对当前工作目录的显示路径。
+    /// 失败时回退返回绝对路径。调用方需知悉：CLI 与审计日志的 path 字段在异常情况下会退化为绝对路径。
+    /// </summary>
     private static string ToRelativeDisplay(string absolutePath, string cwd)
     {
         try
         {
             var relative = Path.GetRelativePath(cwd, absolutePath);
-            // Path.GetRelativePath on Windows returns paths with backslash separators
+            // Path.GetRelativePath on Windows 返回反斜杠分隔的路径；
+            // 若 relative 与输入相同（如跨盘情况），直接返回 absolutePath（非异常回退）
             return relative;
         }
-        catch
-        {
-            return absolutePath;
-        }
+        catch (ArgumentException) { return absolutePath; }
+        catch (PathTooLongException) { return absolutePath; }
+        catch (NotSupportedException) { return absolutePath; }
     }
 
     private static bool ConfirmDeletion()
@@ -237,11 +241,11 @@ internal static class SafeDeleteApp
         }
     }
 
-    private static bool WriteAudit(AuditLogger logger, AuditEvent audit, out string error)
+    private static bool WriteAudit(AuditLogger logger, AuditEvent audit, out string error, bool bestEffort = false)
     {
         try
         {
-            logger.Write(audit);
+            logger.Write(audit, bestEffort);
             error = string.Empty;
             return true;
         }
@@ -823,7 +827,7 @@ internal sealed class AuditLogger
         return new AuditLogger(logPaths);
     }
 
-    public void Write(AuditEvent auditEvent)
+    public void Write(AuditEvent auditEvent, bool bestEffort = false)
     {
         var line = JsonSerializer.Serialize(auditEvent, JsonOptions) + Environment.NewLine;
         var lineBytes = Encoding.UTF8.GetBytes(line);
@@ -841,10 +845,20 @@ internal sealed class AuditLogger
             }
         }
 
-        if (failures.Count > 0)
+        if (failures.Count == 0)
         {
-            throw new IOException("One or more audit logs could not be written. " + string.Join(" | ", failures));
+            return;
         }
+
+        if (bestEffort && failures.Count < LogPaths.Count)
+        {
+            // BestEffort 模式：至少一个日志写入成功即视为闭环；
+            // 有部分失败时通过 stderr 提示但不阻断（删除已发生，成功日志里已有证据）
+            Console.Error.WriteLine($"Warning: audit partial write failure: {string.Join("; ", failures)}");
+            return;
+        }
+
+        throw new IOException("One or more audit logs could not be written. " + string.Join(" | ", failures));
     }
 
     private static void WriteLineAtomically(string logPath, byte[] lineBytes)
@@ -922,8 +936,10 @@ internal sealed class AuditLogger
 
 internal sealed class AuditEvent
 {
+    public const int CurrentSchemaVersion = 2;
+
     [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; init; } = 2;
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
     [JsonPropertyName("ts")]
     public string TimestampUtc { get; init; } = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
@@ -935,7 +951,7 @@ internal sealed class AuditEvent
     public required string EventType { get; set; }
 
     [JsonPropertyName("user")]
-    public string User { get; init; } = GetCurrentUserMachine();
+    public string User { get; init; } = GetCurrentUserIdentity();
 
     [JsonPropertyName("pid")]
     public int ProcessId { get; init; } = Environment.ProcessId;
@@ -1028,18 +1044,15 @@ internal sealed class AuditEvent
         };
     }
 
-    private static string GetCurrentUserMachine()
+    private static string GetCurrentUserIdentity()
     {
-        string userName;
         try
         {
-            userName = WindowsIdentity.GetCurrent().Name;
+            return WindowsIdentity.GetCurrent().Name;
         }
         catch
         {
-            userName = Environment.UserName;
+            return $"{Environment.UserName}@{Environment.MachineName}";
         }
-
-        return $"{userName}@{Environment.MachineName}";
     }
 }
