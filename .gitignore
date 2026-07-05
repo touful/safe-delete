@@ -36,3 +36,6 @@ $RECYCLE.BIN/
 # Sensitive (local config, absolute paths, proxy settings)
 AGENTS.md
 .opencode/
+
+# Release artifacts
+*.zip
