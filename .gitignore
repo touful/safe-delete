@@ -13,3 +13,26 @@ obj/
 # OS
 Thumbs.db
 *.user
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+*.lnk
+
+# .NET
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+[Rr]elease[Rr]eload/
+*.pfx
+*.key
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.cache
+
+# Sensitive (local config, absolute paths, proxy settings)
+AGENTS.md
+.opencode/
